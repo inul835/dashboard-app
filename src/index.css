@@ -1,0 +1,59 @@
+@import 'tailwindcss';
+
+:root {
+  color-scheme: dark;
+  font-family: Inter, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #0e1117;
+  color: #edf3ff;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  background: #f2f6ff;
+  color: #0f172a;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+  min-height: 100vh;
+  background: #0e1117;
+}
+
+:root[data-theme='light'] html,
+:root[data-theme='light'] body,
+:root[data-theme='light'] #root {
+  background: #edf2ff;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #0e1117;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
