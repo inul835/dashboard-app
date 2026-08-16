@@ -1,22 +1,76 @@
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
+use std::fs::{File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TaskItem {
+pub struct SubtaskItem {
+  #[serde(default)]
   pub id: u64,
+  #[serde(default)]
   pub title: String,
-  pub description: Option<String>,
-  pub status: String,
-  pub priority: String,
-  pub due_date: Option<String>,
+  #[serde(default)]
+  pub completed: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+fn default_string() -> String {
+  String::new()
+}
+
+fn default_vec_string() -> Vec<String> {
+  Vec::new()
+}
+
+fn default_subtasks() -> Vec<SubtaskItem> {
+  Vec::new()
+}
+
+fn default_next_id() -> u64 {
+  1
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TaskItem {
+  #[serde(default)]
+  pub id: u64,
+  #[serde(default = "default_string")]
+  pub title: String,
+  #[serde(default)]
+  pub description: Option<String>,
+  #[serde(default = "default_string")]
+  pub status: String,
+  #[serde(default = "default_string")]
+  pub priority: String,
+  #[serde(default)]
+  pub due_date: Option<String>,
+  #[serde(default)]
+  pub due_time: Option<String>,
+  #[serde(default = "default_string")]
+  pub category: String,
+  #[serde(default = "default_vec_string")]
+  pub tags: Vec<String>,
+  #[serde(default = "default_string")]
+  pub created_at: String,
+  #[serde(default = "default_string")]
+  pub updated_at: String,
+  #[serde(default = "default_subtasks")]
+  pub subtasks: Vec<SubtaskItem>,
+  #[serde(default = "default_string")]
+  pub recurrence: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct AppData {
+  #[serde(default)]
   tasks: Vec<TaskItem>,
+  #[serde(default = "default_next_id")]
   next_id: u64,
+}
+
+impl Default for AppData {
+  fn default() -> Self {
+    AppData { tasks: Vec::new(), next_id: 1 }
+  }
 }
 
 fn data_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -35,12 +89,22 @@ fn data_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
 fn read_app_data(path: &PathBuf) -> Result<AppData, String> {
   if !path.exists() {
-    return Ok(AppData { tasks: vec![], next_id: 1 });
+    return Ok(AppData::default());
   }
   let mut f = File::open(path).map_err(|e| format!("open error: {}", e))?;
   let mut s = String::new();
   f.read_to_string(&mut s).map_err(|e| format!("read error: {}", e))?;
-  serde_json::from_str(&s).map_err(|e| format!("json parse error: {}", e))
+  let mut data: AppData = serde_json::from_str(&s).map_err(|e| format!("json parse error: {}", e))?;
+  // normalize tasks with defaults for created_at/updated_at if empty
+  for t in &mut data.tasks {
+    if t.created_at.is_empty() {
+      t.created_at = chrono::Utc::now().to_rfc3339();
+    }
+    if t.updated_at.is_empty() {
+      t.updated_at = t.created_at.clone();
+    }
+  }
+  Ok(data)
 }
 
 fn write_app_data(path: &PathBuf, data: &AppData) -> Result<(), String> {
@@ -54,7 +118,7 @@ fn write_app_data(path: &PathBuf, data: &AppData) -> Result<(), String> {
 fn db_init(app: tauri::AppHandle) -> Result<(), String> {
   let path = data_file_path(&app)?;
   if !path.exists() {
-    let data = AppData { tasks: vec![], next_id: 1 };
+    let data = AppData::default();
     write_app_data(&path, &data)?;
   }
   Ok(())
@@ -73,6 +137,10 @@ fn create_task(app: tauri::AppHandle, mut task: TaskItem) -> Result<TaskItem, St
   let mut data = read_app_data(&path)?;
   task.id = data.next_id;
   data.next_id = data.next_id.saturating_add(1);
+  if task.created_at.is_empty() {
+    task.created_at = chrono::Utc::now().to_rfc3339();
+  }
+  task.updated_at = task.created_at.clone();
   data.tasks.push(task.clone());
   write_app_data(&path, &data)?;
   Ok(task)
@@ -83,9 +151,11 @@ fn update_task(app: tauri::AppHandle, updated: TaskItem) -> Result<TaskItem, Str
   let path = data_file_path(&app)?;
   let mut data = read_app_data(&path)?;
   if let Some(pos) = data.tasks.iter().position(|t| t.id == updated.id) {
-    data.tasks[pos] = updated.clone();
+    let mut u = updated.clone();
+    u.updated_at = chrono::Utc::now().to_rfc3339();
+    data.tasks[pos] = u.clone();
     write_app_data(&path, &data)?;
-    Ok(updated)
+    Ok(u)
   } else {
     Err("task not found".into())
   }

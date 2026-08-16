@@ -131,11 +131,6 @@ function App() {
 
   return (
     <div className="app-shell">
-      <Suspense fallback={null}>
-        {activeSection === 'tasks' && (
-          <TaskLoader />
-        )}
-      </Suspense>
       <aside className="sidebar">
         <div className="brand-block">
           <div className="brand-mark">C</div>
@@ -380,10 +375,10 @@ function App() {
               <div className="panel-header">
                 <h2>Tasks</h2>
               </div>
-              {/* Tasks page is lazy-loaded below */}
               <div>
-                {/* placeholder where Tasks component will mount */}
-                <div id="tasks-root"></div>
+                <Suspense fallback={<div>Loading Tasks...</div>}>
+                  <TaskLoader />
+                </Suspense>
               </div>
             </div>
           ) : activeSection !== 'home' ? (
