@@ -20,6 +20,7 @@ export type Task = {
   updated_at: string
   subtasks: Subtask[]
   recurrence: 'None' | 'Daily' | 'Weekly' | 'Monthly' | string
+  project_id?: number | null
 }
 
 const LS_KEY = 'cc.tasks.v1'
@@ -42,6 +43,7 @@ function normalizeTask(raw: any): Task {
       ? raw.subtasks.map((s: any, idx: number) => ({ id: Number(s.id) || idx + 1, title: s.title || '', completed: !!s.completed }))
       : [],
     recurrence: raw.recurrence || 'None',
+    project_id: raw.project_id != null ? Number(raw.project_id) : null,
   }
 }
 
@@ -409,4 +411,181 @@ export async function addRecentFile(path: string, name?: string): Promise<void> 
   ].slice(0, 10)
 
   writeFilePreferenceState({ ...prefs, recentFiles: nextRecent })
+}
+
+// Projects API
+const PROJECTS_LS_KEY = 'cc.projects.v1'
+
+export type ProjectItem = {
+  id: number
+  name: string
+  description?: string
+  status: 'Planning'|'Active'|'On Hold'|'Completed'|'Archived'
+  priority: 'Low'|'Medium'|'High'|'Urgent'
+  icon?: string
+  color?: string
+  tags: string[]
+  start_date?: string | null
+  due_date?: string | null
+  created_at: string
+  updated_at: string
+  archived: boolean
+  tasks: number[]
+  notes: number[]
+  files: Array<{ path: string; name?: string }>
+}
+
+function normalizeProject(raw: any): ProjectItem {
+  const now = new Date().toISOString()
+  return {
+    id: Number(raw.id) || 0,
+    name: raw.name || 'Untitled Project',
+    description: raw.description || '',
+    status: ['Planning','Active','On Hold','Completed','Archived'].includes(raw.status) ? raw.status : 'Planning',
+    priority: ['Low','Medium','High','Urgent'].includes(raw.priority) ? raw.priority : 'Medium',
+    icon: raw.icon || '',
+    color: raw.color || '',
+    tags: Array.isArray(raw.tags) ? raw.tags.map(String) : (raw.tags ? String(raw.tags).split(',').map((s:any)=>s.trim()).filter(Boolean) : []),
+    start_date: raw.start_date ?? null,
+    due_date: raw.due_date ?? null,
+    created_at: raw.created_at || now,
+    updated_at: raw.updated_at || (raw.created_at || now),
+    archived: !!raw.archived,
+    tasks: Array.isArray(raw.tasks) ? raw.tasks.map(Number) : [],
+    notes: Array.isArray(raw.notes) ? raw.notes.map(Number) : [],
+    files: Array.isArray(raw.files)
+      ? raw.files.map((f:any)=>({ path: String(f.path), name: f.name ? String(f.name) : (String(f.path).split(/[\\/]/).pop()||'File') }))
+      : [],
+  }
+}
+
+export async function getProjects(): Promise<ProjectItem[]> {
+  try {
+    const raw = (await invoke<any[]>('get_projects')) || []
+    return Array.isArray(raw) ? raw.map(normalizeProject) : []
+  } catch {
+    if (typeof localStorage === 'undefined') return []
+    const raw = localStorage.getItem(PROJECTS_LS_KEY)
+    if (!raw) return []
+    try { const parsed = JSON.parse(raw); return (parsed.projects||[]).map(normalizeProject) } catch { return [] }
+  }
+}
+
+export async function createProject(payload: Partial<ProjectItem>): Promise<ProjectItem> {
+  const now = new Date().toISOString()
+  const built: any = {
+    id: 0,
+    name: payload.name || 'New Project',
+    description: payload.description || '',
+    status: payload.status || 'Planning',
+    priority: payload.priority || 'Medium',
+    icon: payload.icon || '',
+    color: payload.color || '',
+    tags: payload.tags || [],
+    start_date: payload.start_date ?? null,
+    due_date: payload.due_date ?? null,
+    created_at: payload.created_at || now,
+    updated_at: payload.updated_at || (payload.created_at || now),
+    archived: !!payload.archived,
+    tasks: payload.tasks || [],
+    notes: payload.notes || [],
+    files: payload.files || [],
+  }
+  try {
+    const res = await invoke<any>('create_project', { project: built })
+    return normalizeProject(res)
+  } catch {
+    if (typeof localStorage === 'undefined') return normalizeProject({ ...built, id: Math.floor(Math.random()*1000000) })
+    const raw = localStorage.getItem(PROJECTS_LS_KEY)
+    const parsed = raw ? JSON.parse(raw) : { projects: [], next_project_id: 1 }
+    parsed.next_project_id = Number(parsed.next_project_id) || 1
+    const id = parsed.next_project_id++
+    const proj = normalizeProject({ ...built, id })
+    parsed.projects.unshift(proj)
+    localStorage.setItem(PROJECTS_LS_KEY, JSON.stringify(parsed))
+    return proj
+  }
+}
+
+export async function updateProject(payload: Partial<ProjectItem> & { id: number }): Promise<ProjectItem> {
+  const built = { ...(payload as any) }
+  built.updated_at = new Date().toISOString()
+  try {
+    const res = await invoke<any>('update_project', { project: built })
+    return normalizeProject(res)
+  } catch {
+    if (typeof localStorage === 'undefined') return normalizeProject(built)
+    const raw = localStorage.getItem(PROJECTS_LS_KEY)
+    const parsed = raw ? JSON.parse(raw) : { projects: [], next_project_id: 1 }
+    const pos = (parsed.projects || []).findIndex((p:any)=> Number(p.id) === Number(built.id))
+    if (pos === -1) {
+      parsed.projects.unshift(built)
+    } else {
+      parsed.projects[pos] = { ...parsed.projects[pos], ...built }
+    }
+    localStorage.setItem(PROJECTS_LS_KEY, JSON.stringify(parsed))
+    return normalizeProject(built)
+  }
+}
+
+export async function deleteProject(id: number): Promise<boolean> {
+  try {
+    return await invoke<boolean>('delete_project', { id })
+  } catch {
+    if (typeof localStorage === 'undefined') return false
+    const raw = localStorage.getItem(PROJECTS_LS_KEY)
+    if (!raw) return false
+    try {
+      const parsed = JSON.parse(raw)
+      const orig = (parsed.projects||[]).length
+      parsed.projects = (parsed.projects||[]).filter((p:any)=> Number(p.id) !== Number(id))
+      localStorage.setItem(PROJECTS_LS_KEY, JSON.stringify(parsed))
+      return parsed.projects.length !== orig
+    } catch { return false }
+  }
+}
+
+export async function attachTaskToProject(taskId: number, projectId: number): Promise<void> {
+  try { await invoke('attach_task_to_project', { taskId, projectId }); return } catch {}
+  // local fallback: add to project.tasks and set task.project_id
+  const projsRaw = localStorage.getItem(PROJECTS_LS_KEY)
+  const projs = projsRaw ? JSON.parse(projsRaw) : { projects: [], next_project_id: 1 }
+  const idx = (projs.projects||[]).findIndex((p:any)=> Number(p.id) === Number(projectId))
+  if (idx >= 0) {
+    const p = projs.projects[idx]
+    p.tasks = p.tasks || []
+    if (!p.tasks.includes(taskId)) p.tasks.push(taskId)
+    projs.projects[idx] = p
+    localStorage.setItem(PROJECTS_LS_KEY, JSON.stringify(projs))
+  }
+  // update task record
+  try {
+    const tasks = await getTasks()
+    const t = tasks.find(t=> t.id === taskId)
+    if (t) {
+      t.project_id = projectId
+      await updateTask(t)
+    }
+  } catch {}
+}
+
+export async function detachTaskFromProject(taskId: number, projectId: number): Promise<void> {
+  try { await invoke('detach_task_from_project', { taskId, projectId }); return } catch {}
+  const projsRaw = localStorage.getItem(PROJECTS_LS_KEY)
+  const projs = projsRaw ? JSON.parse(projsRaw) : { projects: [], next_project_id: 1 }
+  const idx = (projs.projects||[]).findIndex((p:any)=> Number(p.id) === Number(projectId))
+  if (idx >= 0) {
+    const p = projs.projects[idx]
+    p.tasks = (p.tasks||[]).filter((id:number)=> Number(id) !== Number(taskId))
+    projs.projects[idx] = p
+    localStorage.setItem(PROJECTS_LS_KEY, JSON.stringify(projs))
+  }
+  try {
+    const tasks = await getTasks()
+    const t = tasks.find(t=> t.id === taskId)
+    if (t && t.project_id === projectId) {
+      t.project_id = null
+      await updateTask(t)
+    }
+  } catch {}
 }
