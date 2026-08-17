@@ -140,3 +140,108 @@ export async function deleteTask(id: number): Promise<boolean> {
     return parsed.tasks.length !== orig
   }
 }
+
+// Notes API
+const NOTES_LS_KEY = 'cc.notes.v1'
+
+function normalizeNote(raw: any) {
+  const now = new Date().toISOString()
+  return {
+    id: Number(raw.id) || 0,
+    title: raw.title || '',
+    content: raw.content || '',
+    tags: Array.isArray(raw.tags) ? raw.tags.map(String) : (raw.tags ? String(raw.tags).split(',').map((s:any)=>s.trim()).filter(Boolean) : []),
+    category: raw.category || '',
+    pinned: !!raw.pinned,
+    favorite: !!raw.favorite,
+    archived: !!raw.archived,
+    created_at: raw.created_at || now,
+    updated_at: raw.updated_at || (raw.created_at || now),
+  }
+}
+
+export type Note = {
+  id: number
+  title: string
+  content: string
+  tags: string[]
+  category: string
+  pinned: boolean
+  favorite: boolean
+  archived: boolean
+  created_at: string
+  updated_at: string
+}
+
+export async function getNotes(): Promise<Note[]> {
+  try {
+    const raw = (await invoke<any[]>('get_notes')) || []
+    return raw.map(normalizeNote)
+  } catch (e) {
+    const raw = localStorage.getItem(NOTES_LS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return (parsed.notes || []).map(normalizeNote)
+  }
+}
+
+export async function createNote(payload: Partial<ReturnType<typeof normalizeNote>>): Promise<any> {
+  const now = new Date().toISOString()
+  const built = {
+    title: payload.title || 'Untitled note',
+    content: payload.content || '',
+    tags: payload.tags || [],
+    category: payload.category || '',
+    pinned: !!payload.pinned,
+    favorite: !!payload.favorite,
+    archived: !!payload.archived,
+    created_at: payload.created_at || now,
+    updated_at: payload.updated_at || (payload.created_at || now),
+  }
+  try {
+    const note = await invoke<any>('create_note', { note: { ...built, id: 0 } })
+    return normalizeNote(note)
+  } catch (e) {
+    const raw = localStorage.getItem(NOTES_LS_KEY)
+    let parsed: any
+    if (!raw) {
+      parsed = { notes: [], next_note_id: 1 }
+    } else {
+      parsed = JSON.parse(raw)
+    }
+    const id = parsed.next_note_id++
+    const note = normalizeNote({ id, ...built })
+    parsed.notes.unshift(note)
+    localStorage.setItem(NOTES_LS_KEY, JSON.stringify(parsed))
+    return note
+  }
+}
+
+export async function updateNote(payload: Partial<ReturnType<typeof normalizeNote>> & { id: number }) {
+  const built = { ...(payload as any), updated_at: new Date().toISOString() }
+  try {
+    const updated = await invoke<any>('update_note', { updated: built })
+    return normalizeNote(updated)
+  } catch (e) {
+    const raw = localStorage.getItem(NOTES_LS_KEY)!
+    const parsed = JSON.parse(raw)
+    const pos = parsed.notes.findIndex((n: any) => Number(n.id) === Number(payload.id))
+    const merged = { ...(parsed.notes[pos] || {}), ...built }
+    parsed.notes[pos] = merged
+    localStorage.setItem(NOTES_LS_KEY, JSON.stringify(parsed))
+    return normalizeNote(merged)
+  }
+}
+
+export async function deleteNote(id: number): Promise<boolean> {
+  try {
+    return await invoke<boolean>('delete_note', { id })
+  } catch (e) {
+    const raw = localStorage.getItem(NOTES_LS_KEY)!
+    const parsed = JSON.parse(raw)
+    const orig = parsed.notes.length
+    parsed.notes = parsed.notes.filter((n: any) => Number(n.id) !== Number(id))
+    localStorage.setItem(NOTES_LS_KEY, JSON.stringify(parsed))
+    return parsed.notes.length !== orig
+  }
+}

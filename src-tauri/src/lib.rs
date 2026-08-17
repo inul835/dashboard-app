@@ -59,17 +59,45 @@ pub struct TaskItem {
   pub recurrence: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct NoteItem {
+  #[serde(default)]
+  pub id: u64,
+  #[serde(default = "default_string")]
+  pub title: String,
+  #[serde(default = "default_string")]
+  pub content: String,
+  #[serde(default = "default_vec_string")]
+  pub tags: Vec<String>,
+  #[serde(default = "default_string")]
+  pub category: String,
+  #[serde(default)]
+  pub pinned: bool,
+  #[serde(default)]
+  pub favorite: bool,
+  #[serde(default)]
+  pub archived: bool,
+  #[serde(default = "default_string")]
+  pub created_at: String,
+  #[serde(default = "default_string")]
+  pub updated_at: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct AppData {
   #[serde(default)]
   tasks: Vec<TaskItem>,
+  #[serde(default)]
+  notes: Vec<NoteItem>,
   #[serde(default = "default_next_id")]
   next_id: u64,
+  #[serde(default = "default_next_id")]
+  next_note_id: u64,
 }
 
 impl Default for AppData {
   fn default() -> Self {
-    AppData { tasks: Vec::new(), next_id: 1 }
+    AppData { tasks: Vec::new(), notes: Vec::new(), next_id: 1, next_note_id: 1 }
   }
 }
 
@@ -102,6 +130,14 @@ fn read_app_data(path: &PathBuf) -> Result<AppData, String> {
     }
     if t.updated_at.is_empty() {
       t.updated_at = t.created_at.clone();
+    }
+  }
+  for n in &mut data.notes {
+    if n.created_at.is_empty() {
+      n.created_at = chrono::Utc::now().to_rfc3339();
+    }
+    if n.updated_at.is_empty() {
+      n.updated_at = n.created_at.clone();
     }
   }
   Ok(data)
@@ -174,6 +210,56 @@ fn delete_task(app: tauri::AppHandle, id: u64) -> Result<bool, String> {
   Ok(changed)
 }
 
+#[tauri::command]
+fn get_notes(app: tauri::AppHandle) -> Result<Vec<NoteItem>, String> {
+  let path = data_file_path(&app)?;
+  let data = read_app_data(&path)?;
+  Ok(data.notes)
+}
+
+#[tauri::command]
+fn create_note(app: tauri::AppHandle, mut note: NoteItem) -> Result<NoteItem, String> {
+  let path = data_file_path(&app)?;
+  let mut data = read_app_data(&path)?;
+  note.id = data.next_note_id;
+  data.next_note_id = data.next_note_id.saturating_add(1);
+  if note.created_at.is_empty() {
+    note.created_at = chrono::Utc::now().to_rfc3339();
+  }
+  note.updated_at = note.created_at.clone();
+  data.notes.push(note.clone());
+  write_app_data(&path, &data)?;
+  Ok(note)
+}
+
+#[tauri::command]
+fn update_note(app: tauri::AppHandle, updated: NoteItem) -> Result<NoteItem, String> {
+  let path = data_file_path(&app)?;
+  let mut data = read_app_data(&path)?;
+  if let Some(pos) = data.notes.iter().position(|n| n.id == updated.id) {
+    let mut u = updated.clone();
+    u.updated_at = chrono::Utc::now().to_rfc3339();
+    data.notes[pos] = u.clone();
+    write_app_data(&path, &data)?;
+    Ok(u)
+  } else {
+    Err("note not found".into())
+  }
+}
+
+#[tauri::command]
+fn delete_note(app: tauri::AppHandle, id: u64) -> Result<bool, String> {
+  let path = data_file_path(&app)?;
+  let mut data = read_app_data(&path)?;
+  let original_len = data.notes.len();
+  data.notes.retain(|n| n.id != id);
+  let changed = data.notes.len() != original_len;
+  if changed {
+    write_app_data(&path, &data)?;
+  }
+  Ok(changed)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -192,7 +278,11 @@ pub fn run() {
       get_tasks,
       create_task,
       update_task,
-      delete_task
+      delete_task,
+      get_notes,
+      create_note,
+      update_note,
+      delete_note,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

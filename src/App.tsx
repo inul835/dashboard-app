@@ -61,6 +61,7 @@ const todayTasks = [
 ]
 
 const TaskLoader = lazy(() => import('./pages/Tasks'))
+const NotesLoader = lazy(() => import('./pages/Notes'))
 
 const projectCards = [
   { name: 'Personal OS redesign', progress: 72, due: 'May 18' },
@@ -378,6 +379,17 @@ function App() {
               <div>
                 <Suspense fallback={<div>Loading Tasks...</div>}>
                   <TaskLoader />
+                </Suspense>
+              </div>
+            </div>
+          ) : activeSection === 'notes' ? (
+            <div className="panel panel-wide">
+              <div className="panel-header">
+                <h2>Notes</h2>
+              </div>
+              <div>
+                <Suspense fallback={<div>Loading Notes...</div>}>
+                  <NotesLoader />
                 </Suspense>
               </div>
             </div>
