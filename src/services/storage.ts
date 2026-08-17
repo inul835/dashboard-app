@@ -49,7 +49,7 @@ async function tauriAvailable() {
   try {
     await invoke('db_init')
     return true
-  } catch (e) {
+  } catch {
     return false
   }
 }
@@ -69,11 +69,16 @@ export async function getTasks(): Promise<Task[]> {
   try {
     const raw = (await invoke<any[]>('get_tasks')) || []
     return raw.map(normalizeTask)
-  } catch (e) {
+  } catch {
+    if (typeof localStorage === 'undefined') return []
     const raw = localStorage.getItem(LS_KEY)
     if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return (parsed.tasks || []).map(normalizeTask)
+    try {
+      const parsed = JSON.parse(raw)
+      return (parsed.tasks || []).map(normalizeTask)
+    } catch {
+      return []
+    }
   }
 }
 
@@ -100,9 +105,14 @@ export async function createTask(payload: Partial<Task>): Promise<Task> {
   try {
     const task = await invoke<any>('create_task', { task: { ...built, id: 0 } })
     return normalizeTask(task)
-  } catch (e) {
-    const raw = localStorage.getItem(LS_KEY)!
-    const parsed = JSON.parse(raw)
+  } catch {
+    if (typeof localStorage === 'undefined') {
+      return normalizeTask({ ...built, id: 0, created_at: built.created_at, updated_at: built.updated_at })
+    }
+
+    const raw = localStorage.getItem(LS_KEY)
+    const parsed = raw ? JSON.parse(raw) : { tasks: [], next_id: 1 }
+    parsed.next_id = Number(parsed.next_id) || 1
     const id = parsed.next_id++
     const task = normalizeTask({ id, ...built })
     parsed.tasks.push(task)
@@ -117,12 +127,26 @@ export async function updateTask(task: Partial<Task> & { id: number }): Promise<
   try {
     const updated = await invoke<any>('update_task', { updated: built })
     return normalizeTask(updated)
-  } catch (e) {
-    const raw = localStorage.getItem(LS_KEY)!
+  } catch {
+    if (typeof localStorage === 'undefined') {
+      return normalizeTask({ ...built, id: Number(task.id) || 0 })
+    }
+
+    const raw = localStorage.getItem(LS_KEY)
+    if (!raw) {
+      const fallbackTask = normalizeTask({ ...built, id: Number(task.id) || 0 })
+      localStorage.setItem(LS_KEY, JSON.stringify({ tasks: [fallbackTask], next_id: (fallbackTask.id || 0) + 1 }))
+      return fallbackTask
+    }
+
     const parsed = JSON.parse(raw)
     const pos = parsed.tasks.findIndex((t: any) => Number(t.id) === Number(task.id))
-    const merged = { ...(parsed.tasks[pos] || {}), ...built }
-    parsed.tasks[pos] = merged
+    const merged = { ...((pos >= 0 ? parsed.tasks[pos] : {}) || {}), ...built }
+    if (pos === -1) {
+      parsed.tasks.push(merged)
+    } else {
+      parsed.tasks[pos] = merged
+    }
     localStorage.setItem(LS_KEY, JSON.stringify(parsed))
     return normalizeTask(merged)
   }
@@ -131,13 +155,19 @@ export async function updateTask(task: Partial<Task> & { id: number }): Promise<
 export async function deleteTask(id: number): Promise<boolean> {
   try {
     return await invoke<boolean>('delete_task', { id })
-  } catch (e) {
-    const raw = localStorage.getItem(LS_KEY)!
-    const parsed = JSON.parse(raw)
-    const orig = parsed.tasks.length
-    parsed.tasks = parsed.tasks.filter((t: any) => Number(t.id) !== Number(id))
-    localStorage.setItem(LS_KEY, JSON.stringify(parsed))
-    return parsed.tasks.length !== orig
+  } catch {
+    if (typeof localStorage === 'undefined') return false
+    const raw = localStorage.getItem(LS_KEY)
+    if (!raw) return false
+    try {
+      const parsed = JSON.parse(raw)
+      const orig = parsed.tasks.length
+      parsed.tasks = parsed.tasks.filter((t: any) => Number(t.id) !== Number(id))
+      localStorage.setItem(LS_KEY, JSON.stringify(parsed))
+      return parsed.tasks.length !== orig
+    } catch {
+      return false
+    }
   }
 }
 
@@ -177,11 +207,16 @@ export async function getNotes(): Promise<Note[]> {
   try {
     const raw = (await invoke<any[]>('get_notes')) || []
     return raw.map(normalizeNote)
-  } catch (e) {
+  } catch {
+    if (typeof localStorage === 'undefined') return []
     const raw = localStorage.getItem(NOTES_LS_KEY)
     if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return (parsed.notes || []).map(normalizeNote)
+    try {
+      const parsed = JSON.parse(raw)
+      return (parsed.notes || []).map(normalizeNote)
+    } catch {
+      return []
+    }
   }
 }
 
@@ -201,7 +236,11 @@ export async function createNote(payload: Partial<ReturnType<typeof normalizeNot
   try {
     const note = await invoke<any>('create_note', { note: { ...built, id: 0 } })
     return normalizeNote(note)
-  } catch (e) {
+  } catch {
+    if (typeof localStorage === 'undefined') {
+      return normalizeNote({ ...built, id: 0 })
+    }
+
     const raw = localStorage.getItem(NOTES_LS_KEY)
     let parsed: any
     if (!raw) {
@@ -209,6 +248,7 @@ export async function createNote(payload: Partial<ReturnType<typeof normalizeNot
     } else {
       parsed = JSON.parse(raw)
     }
+    parsed.next_note_id = Number(parsed.next_note_id) || 1
     const id = parsed.next_note_id++
     const note = normalizeNote({ id, ...built })
     parsed.notes.unshift(note)
@@ -222,12 +262,26 @@ export async function updateNote(payload: Partial<ReturnType<typeof normalizeNot
   try {
     const updated = await invoke<any>('update_note', { updated: built })
     return normalizeNote(updated)
-  } catch (e) {
-    const raw = localStorage.getItem(NOTES_LS_KEY)!
+  } catch {
+    if (typeof localStorage === 'undefined') {
+      return normalizeNote({ ...built, id: Number(payload.id) || 0 })
+    }
+
+    const raw = localStorage.getItem(NOTES_LS_KEY)
+    if (!raw) {
+      const fallbackNote = normalizeNote({ ...built, id: Number(payload.id) || 0 })
+      localStorage.setItem(NOTES_LS_KEY, JSON.stringify({ notes: [fallbackNote], next_note_id: (fallbackNote.id || 0) + 1 }))
+      return fallbackNote
+    }
+
     const parsed = JSON.parse(raw)
     const pos = parsed.notes.findIndex((n: any) => Number(n.id) === Number(payload.id))
-    const merged = { ...(parsed.notes[pos] || {}), ...built }
-    parsed.notes[pos] = merged
+    const merged = { ...((pos >= 0 ? parsed.notes[pos] : {}) || {}), ...built }
+    if (pos === -1) {
+      parsed.notes.unshift(merged)
+    } else {
+      parsed.notes[pos] = merged
+    }
     localStorage.setItem(NOTES_LS_KEY, JSON.stringify(parsed))
     return normalizeNote(merged)
   }
@@ -236,13 +290,19 @@ export async function updateNote(payload: Partial<ReturnType<typeof normalizeNot
 export async function deleteNote(id: number): Promise<boolean> {
   try {
     return await invoke<boolean>('delete_note', { id })
-  } catch (e) {
-    const raw = localStorage.getItem(NOTES_LS_KEY)!
-    const parsed = JSON.parse(raw)
-    const orig = parsed.notes.length
-    parsed.notes = parsed.notes.filter((n: any) => Number(n.id) !== Number(id))
-    localStorage.setItem(NOTES_LS_KEY, JSON.stringify(parsed))
-    return parsed.notes.length !== orig
+  } catch {
+    if (typeof localStorage === 'undefined') return false
+    const raw = localStorage.getItem(NOTES_LS_KEY)
+    if (!raw) return false
+    try {
+      const parsed = JSON.parse(raw)
+      const orig = parsed.notes.length
+      parsed.notes = parsed.notes.filter((n: any) => Number(n.id) !== Number(id))
+      localStorage.setItem(NOTES_LS_KEY, JSON.stringify(parsed))
+      return parsed.notes.length !== orig
+    } catch {
+      return false
+    }
   }
 }
 
@@ -288,7 +348,7 @@ function readFilePreferenceState(): FilePreferenceState {
             }))
         : [],
     }
-  } catch (error) {
+  } catch {
     return { favorites: [], recentFiles: [] }
   }
 }

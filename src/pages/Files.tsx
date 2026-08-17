@@ -68,21 +68,63 @@ function joinPath(base: string, relative: string) {
 
 function getParentDirectory(path: string) {
   if (!path) return ''
-  const normalized = path.replace(/\\/g, '/')
-  const parts = normalized.split('/').filter(Boolean)
-  if (parts.length <= 1) return ''
-  parts.pop()
-  return parts.join('/')
+
+  const value = path.trim()
+  if (!value) return ''
+
+  const separator = value.includes('\\') ? '\\' : '/'
+  const normalized = value.replace(/[\\/]+$/, '')
+  const driveMatch = normalized.match(/^([A-Za-z]:)(?:[\\/].*)?$/)
+
+  if (/^[A-Za-z]:[\\/]?$/.test(normalized)) {
+    return normalized
+  }
+
+  if (driveMatch) {
+    const tail = normalized.replace(/^([A-Za-z]:)/, '')
+    if (!tail || tail === separator) return `${driveMatch[1]}${separator}`
+    const segments = tail.split(/[\\/]+/).filter(Boolean)
+    if (segments.length <= 1) return `${driveMatch[1]}${separator}`
+    return `${driveMatch[1]}${separator}${segments.slice(0, -1).join(separator)}`
+  }
+
+  if (normalized === '/' || normalized === '\\') return normalized
+
+  const segments = normalized.split(/[\\/]+/).filter(Boolean)
+  if (segments.length <= 1) return normalized.startsWith('/') ? '/' : ''
+  return `${normalized.startsWith('/') ? '/' : ''}${segments.slice(0, -1).join(separator)}`
 }
 
 function getBreadcrumbs(path: string) {
   if (!path) return [] as Array<{ label: string; path: string }>
-  const segments = path.replace(/\\/g, '/').split('/').filter(Boolean)
-  let current = ''
-  return segments.map((segment, index) => {
-    current = index === 0 ? segment : `${current}/${segment}`
-    return { label: segment, path: current }
+
+  const value = path.trim()
+  const separator = value.includes('\\') ? '\\' : '/'
+  const driveMatch = value.match(/^([A-Za-z]:)/)
+  const rootLabel = driveMatch ? driveMatch[1] : value.startsWith('/') ? '/' : ''
+  const segments = value.replace(/^([A-Za-z]:)/, '').split(/[\\/]+/).filter(Boolean)
+
+  if (!segments.length) {
+    return rootLabel ? [{ label: rootLabel, path: rootLabel + separator }] : []
+  }
+
+  const crumbs: Array<{ label: string; path: string }> = []
+  let current = rootLabel ? `${rootLabel}${separator}` : value.startsWith('/') ? '/' : ''
+
+  if (rootLabel) {
+    crumbs.push({ label: rootLabel, path: current })
+  } else if (value.startsWith('/')) {
+    crumbs.push({ label: '/', path: '/' })
+    current = '/'
+  }
+
+  segments.forEach((segment, index) => {
+    const nextPath = current === '/' ? `/${segment}` : `${current}${segment}`
+    current = `${current}${index === 0 && current !== '/' ? '' : separator}${segment}`
+    crumbs.push({ label: segment, path: nextPath })
   })
+
+  return crumbs
 }
 
 function getFileTypeFromName(name: string): FileEntry['type'] {
@@ -171,8 +213,7 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
   const [fileTypeFilter, setFileTypeFilter] = useState<FileTypeFilter>('all')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [history, setHistory] = useState<string[]>([])
-  const [historyIndex, setHistoryIndex] = useState(-1)
+  const [navHistory, setNavHistory] = useState<{ items: string[]; index: number }>({ items: [], index: -1 })
 
   useEffect(() => {
     if (storageMode !== 'offline') return
@@ -189,6 +230,7 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
       if (prefs.rootFolder) {
         setRootFolder(prefs.rootFolder)
         setCurrentPath(prefs.rootFolder)
+        setNavHistory({ items: [prefs.rootFolder], index: 0 })
       }
     })()
   }, [storageMode])
@@ -264,16 +306,26 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
     }
   }
 
-  async function persistPreferences() {
-    await saveFilePreferences({
-      rootFolder: rootFolder || undefined,
-      defaultView: viewMode,
-      sortBy,
-      sortDirection,
-      fileTypeFilter,
-      favorites,
-      recentFiles,
-    })
+  async function persistPreferences(next: Partial<{
+    rootFolder: string
+    defaultView: ViewMode
+    sortBy: SortKey
+    sortDirection: 'asc' | 'desc'
+    fileTypeFilter: FileTypeFilter
+    favorites: string[]
+    recentFiles: RecentFile[]
+  }> = {}) {
+    const snapshot = {
+      rootFolder: typeof next.rootFolder === 'string' ? next.rootFolder : rootFolder || undefined,
+      defaultView: next.defaultView ?? viewMode,
+      sortBy: next.sortBy ?? sortBy,
+      sortDirection: next.sortDirection ?? sortDirection,
+      fileTypeFilter: next.fileTypeFilter ?? fileTypeFilter,
+      favorites: next.favorites ?? favorites,
+      recentFiles: next.recentFiles ?? recentFiles,
+    }
+
+    await saveFilePreferences(snapshot)
   }
 
   async function chooseFolder() {
@@ -285,15 +337,19 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
       const selectedPath = Array.isArray(result) ? result[0] : result
       if (!selectedPath) return
 
-      setRootFolder(selectedPath)
-      setCurrentPath(selectedPath)
-      setHistory((prev) => {
-        const next = [...prev, selectedPath]
-        return next.filter((item, index, array) => array.indexOf(item) === index).slice(-25)
+      const normalizedPath = String(selectedPath)
+      setRootFolder(normalizedPath)
+      setCurrentPath(normalizedPath)
+      setNavHistory((prev) => {
+        const base = prev.items.slice(0, prev.index + 1)
+        const nextItems = base[base.length - 1] === normalizedPath ? base : [...base, normalizedPath]
+        return {
+          items: nextItems.slice(-25),
+          index: nextItems.length - 1,
+        }
       })
-      setHistoryIndex((prev) => Math.max(prev, 0))
-      await persistPreferences()
-      await loadDirectory(selectedPath)
+      await persistPreferences({ rootFolder: normalizedPath })
+      await loadDirectory(normalizedPath)
     } catch (selectionError) {
       setError('Could not open the folder picker.')
       console.error(selectionError)
@@ -311,9 +367,15 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
         const { openPath } = await import('@tauri-apps/plugin-opener')
         await openPath(item.path)
         setSelectedItem(item)
-        await addRecentFile(item.path, item.name)
-        const nextRecent = await getRecentFiles()
+
+        const nextRecent = [
+          { path: item.path, name: item.name, openedAt: new Date().toISOString() },
+          ...recentFiles.filter((entry) => entry.path !== item.path),
+        ].slice(0, 10)
+
         setRecentFiles(nextRecent)
+        await persistPreferences({ recentFiles: nextRecent })
+        await addRecentFile(item.path, item.name)
       } catch (openError) {
         setError('Unable to open the file with the system default application.')
         console.error(openError)
@@ -321,22 +383,29 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
       return
     }
 
-    setCurrentPath(item.path)
-    setHistory((prev) => [...prev, item.path].filter((value, index, array) => array.indexOf(value) === index).slice(-25))
-    setHistoryIndex((prev) => prev + 1)
+    const nextPath = item.path
+    setCurrentPath(nextPath)
+    setNavHistory((prev) => {
+      const base = prev.items.slice(0, prev.index + 1)
+      const nextItems = base[base.length - 1] === nextPath ? base : [...base, nextPath]
+      return {
+        items: nextItems.slice(-25),
+        index: nextItems.length - 1,
+      }
+    })
   }
 
   async function goBack() {
-    if (historyIndex <= 0) return
-    const target = history[historyIndex - 1]
-    setHistoryIndex((prev) => prev - 1)
+    if (navHistory.index <= 0) return
+    const target = navHistory.items[navHistory.index - 1]
+    setNavHistory((prev) => ({ ...prev, index: prev.index - 1 }))
     setCurrentPath(target)
   }
 
   async function goForward() {
-    if (historyIndex >= history.length - 1) return
-    const target = history[historyIndex + 1]
-    setHistoryIndex((prev) => prev + 1)
+    if (navHistory.index >= navHistory.items.length - 1) return
+    const target = navHistory.items[navHistory.index + 1]
+    setNavHistory((prev) => ({ ...prev, index: prev.index + 1 }))
     setCurrentPath(target)
   }
 
@@ -344,8 +413,14 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
     const parent = getParentDirectory(currentPath)
     if (!parent) return
     setCurrentPath(parent)
-    setHistory((prev) => [...prev, parent].filter((value, index, array) => array.indexOf(value) === index).slice(-25))
-    setHistoryIndex((prev) => prev + 1)
+    setNavHistory((prev) => {
+      const base = prev.items.slice(0, prev.index + 1)
+      const nextItems = base[base.length - 1] === parent ? base : [...base, parent]
+      return {
+        items: nextItems.slice(-25),
+        index: nextItems.length - 1,
+      }
+    })
   }
 
   async function handleCreateFolder() {
@@ -367,8 +442,9 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
       const fs = await import('@tauri-apps/plugin-fs')
       await fs.mkdir(nextPath)
       await loadDirectory(currentPath)
+      setError(null)
     } catch (createError) {
-      setError('Could not create the folder.')
+      setError('The folder could not be created. Please try a different name.')
       console.error(createError)
     }
   }
@@ -390,8 +466,9 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
       await fs.rename(item.path, target)
       await loadDirectory(parent || currentPath)
       setSelectedItem(null)
+      setError(null)
     } catch (renameError) {
-      setError('Could not rename this item.')
+      setError('The item could not be renamed. Please choose a different name.')
       console.error(renameError)
     }
   }
@@ -403,10 +480,12 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
     try {
       const fs = await import('@tauri-apps/plugin-fs')
       await fs.remove(item.path, { recursive: item.isDirectory, force: false } as any)
-      await loadDirectory(getParentDirectory(item.path) || rootFolder || currentPath)
+      const nextDirectory = getParentDirectory(item.path) || rootFolder || currentPath
+      await loadDirectory(nextDirectory)
       setSelectedItem(null)
+      setError(null)
     } catch (deleteError) {
-      setError('Could not delete this item.')
+      setError('The item could not be deleted. Please check if it is in use and try again.')
       console.error(deleteError)
     }
   }
@@ -414,14 +493,15 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
   async function toggleFavorite(item: FileEntry) {
     const favoritePath = item.path
     const exists = favorites.includes(favoritePath)
+    const nextFavorites = exists ? favorites.filter((entry) => entry !== favoritePath) : [...favorites, favoritePath]
+
+    setFavorites(nextFavorites)
     if (exists) {
       await removeFavoriteFile(favoritePath)
-      setFavorites((current) => current.filter((entry) => entry !== favoritePath))
     } else {
       await addFavoriteFile(favoritePath)
-      setFavorites((current) => [...current, favoritePath])
     }
-    await persistPreferences()
+    await persistPreferences({ favorites: nextFavorites })
   }
 
   if (storageMode !== 'offline') {
@@ -569,11 +649,11 @@ function FilesPage({ storageMode }: { storageMode: StorageMode }) {
         <>
           <div className="files-summary-row">
             <div className="summary-rail">
-              <button type="button" className="ghost-button" onClick={goBack} disabled={historyIndex <= 0}>
+              <button type="button" className="ghost-button" onClick={goBack} disabled={navHistory.index <= 0}>
                 <ArrowLeft size={15} />
                 Back
               </button>
-              <button type="button" className="ghost-button" onClick={goForward} disabled={historyIndex >= history.length - 1}>
+              <button type="button" className="ghost-button" onClick={goForward} disabled={navHistory.index >= navHistory.items.length - 1}>
                 <ArrowRight size={15} />
                 Forward
               </button>
