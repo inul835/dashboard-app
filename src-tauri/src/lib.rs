@@ -83,6 +83,8 @@ pub struct NoteItem {
   pub created_at: String,
   #[serde(default = "default_string")]
   pub updated_at: String,
+  #[serde(default)]
+  pub project_id: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -213,6 +215,89 @@ fn write_app_data(path: &PathBuf, data: &AppData) -> Result<(), String> {
   let mut f = File::create(path).map_err(|e| format!("create error: {}", e))?;
   f.write_all(s.as_bytes())
     .map_err(|e| format!("write error: {}", e))
+}
+
+#[tauri::command]
+fn attach_note_to_project(app: tauri::AppHandle, note_id: u64, project_id: u64) -> Result<(), String> {
+  let path = data_file_path(&app)?;
+  let mut data = read_app_data(&path)?;
+  if !data.projects.iter().any(|p| p.id == project_id) {
+    return Err("project not found".into());
+  }
+  let mut found = false;
+  for n in &mut data.notes {
+    if n.id == note_id {
+      n.project_id = Some(project_id);
+      found = true;
+      break;
+    }
+  }
+  if !found { return Err("note not found".into()); }
+  for p in &mut data.projects {
+    if p.id == project_id {
+      if !p.notes.iter().any(|&id| id == note_id) {
+        p.notes.push(note_id);
+      }
+      break;
+    }
+  }
+  write_app_data(&path, &data)?;
+  Ok(())
+}
+
+#[tauri::command]
+fn detach_note_from_project(app: tauri::AppHandle, note_id: u64, project_id: u64) -> Result<(), String> {
+  let path = data_file_path(&app)?;
+  let mut data = read_app_data(&path)?;
+  for p in &mut data.projects {
+    if p.id == project_id {
+      p.notes.retain(|&id| id != note_id);
+      break;
+    }
+  }
+  for n in &mut data.notes {
+    if n.id == note_id {
+      if let Some(pid) = n.project_id {
+        if pid == project_id {
+          n.project_id = None;
+        }
+      }
+      break;
+    }
+  }
+  write_app_data(&path, &data)?;
+  Ok(())
+}
+
+#[tauri::command]
+fn attach_file_to_project(app: tauri::AppHandle, project_id: u64, path_str: String, name: Option<String>) -> Result<(), String> {
+  let path = data_file_path(&app)?;
+  let mut data = read_app_data(&path)?;
+  if !data.projects.iter().any(|p| p.id == project_id) { return Err("project not found".into()); }
+  for p in &mut data.projects {
+    if p.id == project_id {
+      if !p.files.iter().any(|f| f.path == path_str) {
+        p.files.push(FileRef { path: path_str.clone(), name });
+      }
+      break;
+    }
+  }
+  write_app_data(&path, &data)?;
+  Ok(())
+}
+
+#[tauri::command]
+fn detach_file_from_project(app: tauri::AppHandle, project_id: u64, path_str: String) -> Result<(), String> {
+  let path = data_file_path(&app)?;
+  let mut data = read_app_data(&path)?;
+  for p in &mut data.projects {
+    if p.id == project_id {
+      p.files.retain(|f| f.path != path_str);
+      break;
+    }
+  }
+  write_app_data(&path, &data)?;
+  Ok(())
 }
 
 #[tauri::command]
@@ -477,6 +562,10 @@ pub fn run() {
       delete_project,
       attach_task_to_project,
       detach_task_from_project,
+      attach_note_to_project,
+      detach_note_from_project,
+      attach_file_to_project,
+      detach_file_from_project,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

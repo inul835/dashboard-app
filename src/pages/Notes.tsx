@@ -33,7 +33,18 @@ export default function NotesPage() {
       if (!mounted) return
       setNotes(n)
       setLoading(false)
-      if (n.length) setSelectedId(n[0].id)
+      // honor an external request to open a specific note (e.g., from Project workspace)
+      try{
+        const openId = typeof window !== 'undefined' ? window.localStorage.getItem('workflow-open-note') : null
+        if (openId) {
+          const idNum = Number(openId)
+          const found = n.find(x=> x.id === idNum)
+          if (found) setSelectedId(idNum)
+          // remove the flag
+          if (typeof window !== 'undefined') window.localStorage.removeItem('workflow-open-note')
+        }
+      }catch(e){ /* ignore */ }
+      if (!selectedId && n.length) setSelectedId(n[0].id)
     })()
     return () => { mounted = false }
   }, [])

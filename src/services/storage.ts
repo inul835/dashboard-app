@@ -189,6 +189,7 @@ function normalizeNote(raw: any) {
     archived: !!raw.archived,
     created_at: raw.created_at || now,
     updated_at: raw.updated_at || (raw.created_at || now),
+    project_id: raw.project_id != null ? Number(raw.project_id) : null,
   }
 }
 
@@ -203,6 +204,7 @@ export type Note = {
   archived: boolean
   created_at: string
   updated_at: string
+  project_id?: number | null
 }
 
 export async function getNotes(): Promise<Note[]> {
@@ -234,6 +236,7 @@ export async function createNote(payload: Partial<ReturnType<typeof normalizeNot
     archived: !!payload.archived,
     created_at: payload.created_at || now,
     updated_at: payload.updated_at || (payload.created_at || now),
+    project_id: payload.project_id != null ? Number(payload.project_id) : null,
   }
   try {
     const note = await invoke<any>('create_note', { note: { ...built, id: 0 } })
@@ -257,6 +260,45 @@ export async function createNote(payload: Partial<ReturnType<typeof normalizeNot
     localStorage.setItem(NOTES_LS_KEY, JSON.stringify(parsed))
     return note
   }
+}
+
+export async function attachNoteToProject(noteId: number, projectId: number): Promise<void> {
+  await initStorage()
+  if (await tauriAvailable()) {
+    try { await invoke('attach_note_to_project', { note_id: noteId, project_id: projectId }); return } catch (e) { console.error('tauri attach_note failed', e) }
+  }
+  // fallback local
+  const raw = localStorage.getItem(NOTES_LS_KEY)
+  if (!raw) return
+  try {
+    const parsed = JSON.parse(raw)
+    const notes = parsed.notes || []
+    const idx = notes.findIndex((n: any) => Number(n.id) === Number(noteId))
+    if (idx >= 0) {
+      notes[idx].project_id = projectId
+      parsed.notes = notes
+      localStorage.setItem(NOTES_LS_KEY, JSON.stringify(parsed))
+    }
+  } catch (e) { console.error('attachNoteToProject fallback error', e) }
+}
+
+export async function detachNoteFromProject(noteId: number, projectId: number): Promise<void> {
+  await initStorage()
+  if (await tauriAvailable()) {
+    try { await invoke('detach_note_from_project', { note_id: noteId, project_id: projectId }); return } catch (e) { console.error('tauri detach_note failed', e) }
+  }
+  const raw = localStorage.getItem(NOTES_LS_KEY)
+  if (!raw) return
+  try {
+    const parsed = JSON.parse(raw)
+    const notes = parsed.notes || []
+    const idx = notes.findIndex((n: any) => Number(n.id) === Number(noteId))
+    if (idx >= 0) {
+      if (notes[idx].project_id === projectId) notes[idx].project_id = null
+      parsed.notes = notes
+      localStorage.setItem(NOTES_LS_KEY, JSON.stringify(parsed))
+    }
+  } catch (e) { console.error('detachNoteFromProject fallback error', e) }
 }
 
 export async function updateNote(payload: Partial<ReturnType<typeof normalizeNote>> & { id: number }) {
@@ -387,6 +429,46 @@ export async function addFavoriteFile(path: string): Promise<void> {
   if (!normalized) return
   const favorites = Array.from(new Set([...(prefs.favorites || []), normalized]))
   writeFilePreferenceState({ ...prefs, favorites })
+}
+
+export async function attachFileToProject(projectId: number, file: { path: string; name?: string }): Promise<void> {
+  await initStorage()
+  if (await tauriAvailable()) {
+    try { await invoke('attach_file_to_project', { project_id: projectId, path: file.path, name: file.name || null }); return } catch (e) { console.error('tauri attach_file failed', e) }
+  }
+  // local fallback
+  const raw = localStorage.getItem(PROJECTS_LS_KEY)
+  if (!raw) return
+  try {
+    const parsed = JSON.parse(raw)
+    const idx = (parsed.projects||[]).findIndex((p:any)=> Number(p.id) === Number(projectId))
+    if (idx >= 0) {
+      const p = parsed.projects[idx]
+      p.files = p.files || []
+      if (!p.files.find((f:any)=> f.path === file.path)) p.files.push({ path: file.path, name: file.name })
+      parsed.projects[idx] = p
+      localStorage.setItem(PROJECTS_LS_KEY, JSON.stringify(parsed))
+    }
+  } catch (e) { console.error('attachFileToProject fallback', e) }
+}
+
+export async function detachFileFromProject(projectId: number, filePath: string): Promise<void> {
+  await initStorage()
+  if (await tauriAvailable()) {
+    try { await invoke('detach_file_from_project', { project_id: projectId, path: filePath }); return } catch (e) { console.error('tauri detach_file failed', e) }
+  }
+  const raw = localStorage.getItem(PROJECTS_LS_KEY)
+  if (!raw) return
+  try {
+    const parsed = JSON.parse(raw)
+    const idx = (parsed.projects||[]).findIndex((p:any)=> Number(p.id) === Number(projectId))
+    if (idx >= 0) {
+      const p = parsed.projects[idx]
+      p.files = (p.files||[]).filter((f:any)=> f.path !== filePath)
+      parsed.projects[idx] = p
+      localStorage.setItem(PROJECTS_LS_KEY, JSON.stringify(parsed))
+    }
+  } catch (e) { console.error('detachFileFromProject fallback', e) }
 }
 
 export async function removeFavoriteFile(path: string): Promise<void> {
