@@ -245,3 +245,108 @@ export async function deleteNote(id: number): Promise<boolean> {
     return parsed.notes.length !== orig
   }
 }
+
+// File metadata APIs
+const FILES_LS_KEY = 'cc.files.v1'
+
+export type FilePreferenceState = {
+  rootFolder?: string
+  defaultView?: 'grid' | 'list'
+  sortBy?: 'name' | 'modified' | 'size' | 'type'
+  sortDirection?: 'asc' | 'desc'
+  fileTypeFilter?: string
+  favorites: string[]
+  recentFiles: Array<{ path: string; name: string; openedAt: string }>
+}
+
+function readFilePreferenceState(): FilePreferenceState {
+  if (typeof window === 'undefined') {
+    return { favorites: [], recentFiles: [] }
+  }
+
+  const raw = window.localStorage.getItem(FILES_LS_KEY)
+  if (!raw) {
+    return { favorites: [], recentFiles: [] }
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    return {
+      rootFolder: parsed.rootFolder || undefined,
+      defaultView: parsed.defaultView === 'grid' || parsed.defaultView === 'list' ? parsed.defaultView : 'grid',
+      sortBy: ['name', 'modified', 'size', 'type'].includes(parsed.sortBy) ? parsed.sortBy : 'name',
+      sortDirection: parsed.sortDirection === 'desc' ? 'desc' : 'asc',
+      fileTypeFilter: parsed.fileTypeFilter || 'all',
+      favorites: Array.isArray(parsed.favorites) ? parsed.favorites.filter((value: unknown) => typeof value === 'string') : [],
+      recentFiles: Array.isArray(parsed.recentFiles)
+        ? parsed.recentFiles
+            .filter((value: any) => value && typeof value.path === 'string')
+            .map((value: any) => ({
+              path: String(value.path),
+              name: typeof value.name === 'string' ? value.name : value.path.split(/[\\/]/).pop() || 'File',
+              openedAt: typeof value.openedAt === 'string' ? value.openedAt : new Date().toISOString(),
+            }))
+        : [],
+    }
+  } catch (error) {
+    return { favorites: [], recentFiles: [] }
+  }
+}
+
+function writeFilePreferenceState(state: FilePreferenceState) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(FILES_LS_KEY, JSON.stringify(state))
+}
+
+export async function getFilePreferences(): Promise<FilePreferenceState> {
+  return readFilePreferenceState()
+}
+
+export async function saveFilePreferences(nextPrefs: Partial<FilePreferenceState>): Promise<FilePreferenceState> {
+  const current = readFilePreferenceState()
+  const merged = {
+    ...current,
+    ...nextPrefs,
+    favorites: Array.isArray(nextPrefs.favorites) ? nextPrefs.favorites : current.favorites,
+    recentFiles: Array.isArray(nextPrefs.recentFiles) ? nextPrefs.recentFiles : current.recentFiles,
+  }
+  writeFilePreferenceState(merged)
+  return merged
+}
+
+export async function getFavoriteFiles(): Promise<string[]> {
+  const prefs = readFilePreferenceState()
+  return prefs.favorites
+}
+
+export async function addFavoriteFile(path: string): Promise<void> {
+  const prefs = readFilePreferenceState()
+  const normalized = path.trim()
+  if (!normalized) return
+  const favorites = Array.from(new Set([...(prefs.favorites || []), normalized]))
+  writeFilePreferenceState({ ...prefs, favorites })
+}
+
+export async function removeFavoriteFile(path: string): Promise<void> {
+  const prefs = readFilePreferenceState()
+  const nextFavorites = (prefs.favorites || []).filter((favorite) => favorite !== path)
+  writeFilePreferenceState({ ...prefs, favorites: nextFavorites })
+}
+
+export async function getRecentFiles(): Promise<Array<{ path: string; name: string; openedAt: string }>> {
+  const prefs = readFilePreferenceState()
+  return (prefs.recentFiles || []).slice(0, 10)
+}
+
+export async function addRecentFile(path: string, name?: string): Promise<void> {
+  const prefs = readFilePreferenceState()
+  const normalizedPath = path.trim()
+  if (!normalizedPath) return
+
+  const nextRecent = [
+    { path: normalizedPath, name: name || normalizedPath.split(/[\\/]/).pop() || 'File', openedAt: new Date().toISOString() },
+    ...((prefs.recentFiles || []).filter((item) => item.path !== normalizedPath)),
+  ].slice(0, 10)
+
+  writeFilePreferenceState({ ...prefs, recentFiles: nextRecent })
+}
